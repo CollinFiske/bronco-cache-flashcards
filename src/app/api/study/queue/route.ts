@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       .map((v) => Number(v))
       .filter((v) => Number.isFinite(v));
 
-    const cardIds = getDueCardIds(subjectIds);
+    const cardIds = await getDueCardIds(subjectIds);
     return NextResponse.json({ cardIds, total: cardIds.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid request";

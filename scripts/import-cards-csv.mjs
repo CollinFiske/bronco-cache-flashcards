@@ -1,20 +1,14 @@
+// Imports cards from CSV into Turso.
+//
+// Usage:
+//   node --env-file=.env.local scripts/import-cards-csv.mjs <cards1.csv> [cards2.csv ...] [--subject-id <id>]
+
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { parse } from "csv-parse/sync";
+import { createClient } from "@libsql/client";
 
-function resolveDbPath() {
-  const envPath = process.env.SQLITE_PATH;
-  if (envPath && envPath.trim()) {
-    return path.isAbsolute(envPath) ? envPath : path.join(process.cwd(), envPath);
-  }
-  if (process.env.VERCEL) return "/tmp/flashcards.db";
-  return path.join(process.cwd(), "data", "flashcards.db");
-}
-
-function initSchema(db) {
-  db.pragma("foreign_keys = ON");
-  db.exec(`
+const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS subjects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -50,8 +44,7 @@ CREATE TABLE IF NOT EXISTS dates (
 
 CREATE INDEX IF NOT EXISTS idx_cards_subject_id ON cards(subject_id);
 CREATE INDEX IF NOT EXISTS idx_cards_next_review_date ON cards(next_review_date);
-  `);
-}
+`;
 
 function readArg(flag) {
   const idx = process.argv.indexOf(flag);
@@ -72,7 +65,7 @@ function inferSubjectNameFromFile(filePath) {
 
 function usage() {
   console.error(
-    "Usage: node scripts/import-cards-csv.mjs <cards1.csv> [cards2.csv ...] [--subject-id <id>]\n\n" +
+    "Usage: node --env-file=.env.local scripts/import-cards-csv.mjs <cards1.csv> [cards2.csv ...] [--subject-id <id>]\n\n" +
       "CSV should have headers matching the cards table columns. If subject_id is missing,\n" +
       "the script will create/use a subject inferred from the file name and apply it to all rows.\n\n" +
       "Recommended headers:\n" +
@@ -126,48 +119,49 @@ if (csvPaths.length === 0) {
   process.exit(1);
 }
 
-const dbPath = resolveDbPath();
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+const url = process.env.TURSO_DATABASE_URL;
+const authToken = process.env.TURSO_AUTH_TOKEN;
+if (!url || !authToken) {
+  console.error(
+    "TURSO_DATABASE_URL / TURSO_AUTH_TOKEN are not set.\n" +
+      "Run with: node --env-file=.env.local scripts/import-cards-csv.mjs ...",
+  );
+  process.exit(1);
+}
 
-const db = new Database(dbPath);
-initSchema(db);
+const db = createClient({ url, authToken });
 
-db.pragma("foreign_keys = ON");
-
-
-const insert = db.prepare(`
-INSERT INTO cards (
-  subject_id,
-  question,
-  question_image,
-  answer,
-  answer_image,
-  ease_factor,
-  interval_days,
-  next_review_date,
-  repetitions
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-`);
-
-// Prepared statements to check and automatically create missing subjects
-const checkSubject = db.prepare(`SELECT 1 FROM subjects WHERE id = ?`);
-const insertSubject = db.prepare(`INSERT INTO subjects (id, name, description) VALUES (?, ?, ?)`);
-const getSubjectByName = db.prepare(`SELECT id FROM subjects WHERE name = ? COLLATE NOCASE LIMIT 1`);
-const createSubjectByName = db.prepare(`INSERT INTO subjects (name, description) VALUES (?, ?)`);
-
-function getOrCreateSubjectIdByName(name) {
+async function getOrCreateSubjectIdByName(name) {
   const trimmed = String(name ?? "").trim();
   if (!trimmed) {
     throw new Error("Could not infer subject name from file name");
   }
-  const existing = getSubjectByName.get(trimmed);
-  if (existing && typeof existing.id === "number") return existing.id;
-  const info = createSubjectByName.run(trimmed, "Created automatically during CSV card import");
+  const existing = await db.execute({
+    sql: "SELECT id FROM subjects WHERE name = ? COLLATE NOCASE LIMIT 1",
+    args: [trimmed],
+  });
+  if (existing.rows[0]) return Number(existing.rows[0].id);
+
+  const info = await db.execute({
+    sql: "INSERT INTO subjects (name, description) VALUES (?, ?)",
+    args: [trimmed, "Created automatically during CSV card import"],
+  });
   return Number(info.lastInsertRowid);
 }
 
-const tx = db.transaction((rows, fallbackSubjectId, sourceLabel) => {
+async function ensureSubjectExists(subjectId) {
+  const existing = await db.execute({ sql: "SELECT 1 FROM subjects WHERE id = ?", args: [subjectId] });
+  if (existing.rows[0]) return;
+
+  await db.execute({
+    sql: "INSERT INTO subjects (id, name, description) VALUES (?, ?, ?)",
+    args: [subjectId, `Subject ${subjectId}`, "Created automatically during CSV card import"],
+  });
+}
+
+async function importRows(rows, fallbackSubjectId, sourceLabel) {
   let inserted = 0;
+
   for (const r of rows) {
     const subjectIdRaw = forcedSubjectId ?? Number(r.subject_id);
     const subjectId = Number.isFinite(subjectIdRaw) ? subjectIdRaw : fallbackSubjectId;
@@ -177,11 +171,7 @@ const tx = db.transaction((rows, fallbackSubjectId, sourceLabel) => {
       );
     }
 
-    // Auto-create the parent subject row if it doesn't exist yet
-    if (!checkSubject.get(subjectId)) {
-      const defaultName = `Subject ${subjectId}`;
-      insertSubject.run(subjectId, defaultName, "Created automatically during CSV card import");
-    }
+    await ensureSubjectExists(subjectId);
 
     const question = String(r.question ?? "").trim();
     const answer = String(r.answer ?? "").trim();
@@ -204,23 +194,34 @@ const tx = db.transaction((rows, fallbackSubjectId, sourceLabel) => {
     const nextReviewDate = nextReviewDateRaw ? nextReviewDateRaw : todayIsoDate();
     const repetitions = Number.isFinite(repetitionsRaw) ? repetitionsRaw : 0;
 
-    insert.run(
-      subjectId,
-      question,
-      questionImage,
-      answer,
-      answerImage,
-      easeFactor,
-      intervalDays,
-      nextReviewDate,
-      repetitions,
-    );
+    await db.execute({
+      sql: `
+INSERT INTO cards (
+  subject_id, question, question_image, answer, answer_image,
+  ease_factor, interval_days, next_review_date, repetitions
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      args: [
+        subjectId,
+        question,
+        questionImage,
+        answer,
+        answerImage,
+        easeFactor,
+        intervalDays,
+        nextReviewDate,
+        repetitions,
+      ],
+    });
     inserted += 1;
   }
+
   return inserted;
-});
+}
 
 try {
+  await db.executeMultiple(SCHEMA_SQL);
+
   let total = 0;
 
   for (const csvPath of csvPaths) {
@@ -233,17 +234,15 @@ try {
     });
 
     const fallbackSubjectId =
-      forcedSubjectId ?? getOrCreateSubjectIdByName(inferSubjectNameFromFile(resolvedPath));
+      forcedSubjectId ?? (await getOrCreateSubjectIdByName(inferSubjectNameFromFile(resolvedPath)));
 
-    const count = tx(records, fallbackSubjectId, resolvedPath);
+    const count = await importRows(records, fallbackSubjectId, resolvedPath);
     total += count;
     console.log(`Imported ${count} cards from ${resolvedPath}`);
   }
 
-  console.log(`Imported ${total} cards into ${dbPath}`);
+  console.log(`Imported ${total} cards into Turso.`);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
-} finally {
-  db.close();
 }

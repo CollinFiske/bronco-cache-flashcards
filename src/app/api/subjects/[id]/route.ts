@@ -13,6 +13,6 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid subject id" }, { status: 400 });
   }
 
-  const result = deleteSubject(id);
+  const result = await deleteSubject(id);
   return NextResponse.json(result);
 }

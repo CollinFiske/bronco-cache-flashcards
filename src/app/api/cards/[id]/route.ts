@@ -24,7 +24,7 @@ export async function PUT(
     const answer = typeof body.answer === "string" ? body.answer : "";
     const answer_image = typeof body.answer_image === "string" ? body.answer_image : null;
 
-    const card = updateCard(id, { question, question_image, answer, answer_image });
+    const card = await updateCard(id, { question, question_image, answer, answer_image });
     return NextResponse.json({ card });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid request";
@@ -42,5 +42,5 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid card id" }, { status: 400 });
   }
 
-  return NextResponse.json(deleteCard(id));
+  return NextResponse.json(await deleteCard(id));
 }

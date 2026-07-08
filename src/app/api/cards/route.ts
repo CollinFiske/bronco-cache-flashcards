@@ -3,14 +3,14 @@ import { createCard, listCardsBySubject } from "@/lib/repo";
 
 export const runtime = "nodejs";
 
-export function GET(req: Request) {
+export async function GET(req: Request) {
   const url = new URL(req.url);
   const subjectId = Number(url.searchParams.get("subjectId"));
   if (!Number.isFinite(subjectId)) {
     return NextResponse.json({ error: "subjectId is required" }, { status: 400 });
   }
 
-  return NextResponse.json({ cards: listCardsBySubject(subjectId) });
+  return NextResponse.json({ cards: await listCardsBySubject(subjectId) });
 }
 
 export async function POST(req: Request) {
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     const answer = typeof body.answer === "string" ? body.answer : "";
     const answer_image = typeof body.answer_image === "string" ? body.answer_image : null;
 
-    const card = createCard({ subject_id, question, question_image, answer, answer_image });
+    const card = await createCard({ subject_id, question, question_image, answer, answer_image });
     return NextResponse.json({ card }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid request";

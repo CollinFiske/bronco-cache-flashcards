@@ -24,7 +24,7 @@ export async function POST(req: Request) {
       throw new Error("nextCardId must be a number if provided");
     }
 
-    const result = reviewCard({ cardId, rating, nextCardId });
+    const result = await reviewCard({ cardId, rating, nextCardId });
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid request";

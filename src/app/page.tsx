@@ -3,8 +3,8 @@ import HomeActions from "@/app/ui/HomeActions";
 
 export const dynamic = "force-dynamic";
 
-export default function Home() {
-  const overview = getOverview();
+export default async function Home() {
+  const overview = await getOverview();
 
   return (
     <main>

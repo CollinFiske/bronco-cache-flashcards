@@ -1,25 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import Database from "better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
 
-function resolveDbPath(): string {
-  const envPath = process.env.SQLITE_PATH;
-  if (envPath && envPath.trim()) {
-    return path.isAbsolute(envPath) ? envPath : path.join(process.cwd(), envPath);
-  }
-
-  // Vercel serverless functions can write to /tmp (ephemeral per deployment/instance).
-  if (process.env.VERCEL) {
-    return "/tmp/flashcards.db";
-  }
-
-  return path.join(process.cwd(), "data", "flashcards.db");
-}
-
-function initSchema(db: Database.Database) {
-  db.pragma("foreign_keys = ON");
-
-  db.exec(`
+const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS subjects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -55,36 +36,51 @@ CREATE TABLE IF NOT EXISTS dates (
 
 CREATE INDEX IF NOT EXISTS idx_cards_subject_id ON cards(subject_id);
 CREATE INDEX IF NOT EXISTS idx_cards_next_review_date ON cards(next_review_date);
-`);
+`;
 
-  const existingUser = db
-    .prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
-    .get("default") as { id: number } | undefined;
+function createTursoClient(): Client {
+  const url = process.env.TURSO_DATABASE_URL;
+  const authToken = process.env.TURSO_AUTH_TOKEN;
 
-  if (!existingUser) {
-    db.prepare("INSERT INTO users (username) VALUES (?)").run("default");
+  if (!url) {
+    throw new Error(
+      "TURSO_DATABASE_URL is not set. Add it (and TURSO_AUTH_TOKEN) to your environment.",
+    );
+  }
+
+  return createClient({ url, authToken });
+}
+
+async function initSchema(db: Client): Promise<void> {
+  await db.executeMultiple(SCHEMA_SQL);
+
+  const existingUser = await db.execute({
+    sql: "SELECT id FROM users WHERE username = ? LIMIT 1",
+    args: ["default"],
+  });
+
+  if (existingUser.rows.length === 0) {
+    await db.execute({
+      sql: "INSERT INTO users (username) VALUES (?)",
+      args: ["default"],
+    });
   }
 }
 
 declare global {
-  var __flashcards_db__: Database.Database | undefined;
-  var __flashcards_db_path__: string | undefined;
+  var __flashcards_client__: Client | undefined;
+  var __flashcards_schema_ready__: Promise<void> | undefined;
 }
 
-export function getDb(): Database.Database {
-  const dbPath = resolveDbPath();
-
-  if (globalThis.__flashcards_db__ && globalThis.__flashcards_db_path__ === dbPath) {
-    return globalThis.__flashcards_db__;
+export async function getDb(): Promise<Client> {
+  if (!globalThis.__flashcards_client__) {
+    globalThis.__flashcards_client__ = createTursoClient();
   }
 
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  if (!globalThis.__flashcards_schema_ready__) {
+    globalThis.__flashcards_schema_ready__ = initSchema(globalThis.__flashcards_client__);
+  }
+  await globalThis.__flashcards_schema_ready__;
 
-  const db = new Database(dbPath);
-  initSchema(db);
-
-  globalThis.__flashcards_db__ = db;
-  globalThis.__flashcards_db_path__ = dbPath;
-
-  return db;
+  return globalThis.__flashcards_client__;
 }

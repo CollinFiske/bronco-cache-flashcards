@@ -1,4 +1,4 @@
-Minimal flashcard study app (Next.js App Router + SQLite).
+Minimal flashcard study app (Next.js App Router + Turso/libSQL).
 
 ## Getting Started
 
@@ -22,12 +22,22 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-## SQLite
+## Database (Turso)
 
-- By default, the app creates a SQLite database at `data/flashcards.db`.
-- Override with `SQLITE_PATH` (relative or absolute), e.g. `SQLITE_PATH=./data/my.db`.
+The app stores data in [Turso](https://turso.tech) (hosted libSQL) via `@libsql/client`. Set these
+env vars (in `.env.local` for local dev, and in the Vercel project's environment variables for
+prod — the Vercel Turso integration sets them automatically):
 
-Note for Vercel: file-based SQLite uses the serverless filesystem (often `/tmp`) which is ephemeral. The app will run, but the database may not persist across deployments/instances unless you provide a persistent volume/DB.
+```
+TURSO_DATABASE_URL="libsql://..."
+TURSO_AUTH_TOKEN="..."
+```
+
+Locally, run `vercel env pull .env.development.local` (or copy `.env.local`) to pick up the
+linked project's values. The schema is created automatically on first connection.
+
+`data/*.db` are legacy local SQLite files from before the Turso migration; they're no longer read
+by the app and are kept only as a historical backup.
 
 ## CSV Import
 
@@ -42,4 +52,7 @@ Optional:
 ```bash
 npm run import:cards -- path/to/cards.csv --subject-id 1
 ```
+
+Imports go straight to Turso, so `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` must be set (loaded from
+`.env.local` automatically).
 
