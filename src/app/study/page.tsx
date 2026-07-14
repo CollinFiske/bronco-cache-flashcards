@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const SESSION_KEY = "flashcards_session_v1";
@@ -52,6 +52,9 @@ export default function StudyPage() {
   const [flipped, setFlipped] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const frontCardRef = useRef<HTMLDivElement | null>(null);
+  const backCardRef = useRef<HTMLDivElement | null>(null);
+  const [shellHeight, setShellHeight] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const s = loadSession();
@@ -99,6 +102,25 @@ export default function StudyPage() {
       cancelled = true;
     };
   }, [currentCardId]);
+
+  useEffect(() => {
+    const frontEl = frontCardRef.current;
+    const backEl = backCardRef.current;
+    if (!frontEl || !backEl) return;
+
+    function updateHeight() {
+      const height = flipped ? backEl!.offsetHeight : frontEl!.offsetHeight;
+      setShellHeight(height);
+    }
+
+    updateHeight();
+
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(frontEl);
+    observer.observe(backEl);
+
+    return () => observer.disconnect();
+  }, [card, flipped]);
 
   const progress = useMemo(() => {
     if (!session) return { studied: 0, total: 0 };
@@ -196,9 +218,9 @@ export default function StudyPage() {
       ) : (
         <>
           <div className={flipped ? "flipShell flipped" : "flipShell"}>
-            <div className="flipInner">
+            <div className="flipInner" style={shellHeight ? { height: shellHeight } : undefined}>
               <div className="flipSide">
-                <div className="cardFrame" style={{ minHeight: 260 }}>
+                <div className="cardFrame" style={{ minHeight: 260 }} ref={frontCardRef}>
                   <div>
                     <strong>Question</strong>
                   </div>
@@ -213,7 +235,7 @@ export default function StudyPage() {
               </div>
 
               <div className="flipSide flipBack">
-                <div className="cardFrame" style={{ minHeight: 260 }}>
+                <div className="cardFrame" style={{ minHeight: 260 }} ref={backCardRef}>
                   <div>
                     <strong>Question</strong>
                   </div>
