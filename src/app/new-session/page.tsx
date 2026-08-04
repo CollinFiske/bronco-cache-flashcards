@@ -47,6 +47,23 @@ export default function NewSessionPage() {
     return { subjectCount, cardCount };
   }, [subjects, selected]);
 
+  function selectRandomSubjects() {
+    if (subjects.length === 0) return;
+
+    // Fisher-Yates shuffle a copy, then take up to 4.
+    const shuffled = [...subjects];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const next: Record<number, boolean> = {};
+    for (const s of shuffled.slice(0, 4)) {
+      next[s.id] = true;
+    }
+    setSelected(next);
+  }
+
   async function startSession() {
     if (!selectedSubjectIds.length) {
       alert("Select at least one subject.");
@@ -85,6 +102,16 @@ export default function NewSessionPage() {
   return (
     <main>
       <h1>New Study Session</h1>
+
+      <div style={{ marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={selectRandomSubjects}
+          disabled={loading || subjects.length === 0}
+        >
+          Select 4 random subjects
+        </button>
+      </div>
 
       <div className="cardFrame" style={{ marginTop: 12 }}>
         <strong>Selected:</strong> {selectedCounts.subjectCount} subjects, {selectedCounts.cardCount} cards
